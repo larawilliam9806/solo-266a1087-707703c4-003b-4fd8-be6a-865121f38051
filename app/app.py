@@ -71,6 +71,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         direction_label=lambda d: (
             "出入口 → 站台" if d == "entrance_to_platform" else "站台 → 出入口"
         ),
+        max_outage_lists=model.MAX_HYPOTHETICAL_OUTAGE_LISTS,
     )
 
     _register_web_routes(app)
@@ -191,6 +192,44 @@ def _calibrate(docs: dict[str, dict]) -> dict[str, dict]:
             "tables": model.build_station_tables(station),
         }
     return calibrated
+
+
+def _degradation_message(findings: list[dict]) -> str:
+    """First-line flash text for a publish blocked by a degradation finding."""
+
+    head = findings[0]
+    direction = (
+        "出入口 → 站台"
+        if head["direction"] == "entrance_to_platform"
+        else "站台 → 出入口"
+    )
+    elevators = "、".join(head["outage_elevators"]) or "无（新图本就不通）"
+    return (
+        f"核查发现 {len(findings)} 处换图退化：站台 {head['platform']} 的"
+        f"{direction}在停运 {elevators} 时旧图能通而新图不通。"
+        "发布已中止，生效版与待发草稿均已保留，详见发布页核查结果。"
+    )
+
+
+def _run_degradation_check(
+    conn: sqlite3.Connection, calibrated: dict[str, dict]
+) -> dict:
+    """Table-only regression check of the active version vs the new tables."""
+
+    old_version_id = db.active_version_id(conn)
+    if old_version_id is None:
+        return {"findings": [], "checked_lists": 0, "old_version_id": None}
+    old_maps = {
+        row["station_id"]: {"meta": row["meta"], "tables": row["tables"]}
+        for row in db.list_station_maps(conn, old_version_id)
+    }
+    report = model.check_version_degradation(
+        old_maps,
+        {sid: {"meta": info["meta"], "tables": info["tables"]}
+         for sid, info in calibrated.items()},
+    )
+    report["old_version_id"] = old_version_id
+    return report
 
 
 def _api_error(message: str, status: int = 400) -> Response:
@@ -331,9 +370,10 @@ def _register_web_routes(app: Flask) -> None:
             db.version_docs(conn, ctx["version_id"]) if ctx else {}
         )
         drafts = db.list_drafts(conn)
-        merged = _merged_docs(
-            conn, {d["doc"].get("station_id", d["station_id"]): d["doc"] for d in drafts}
-        )
+        draft_docs = {
+            d["doc"].get("station_id", d["station_id"]): d["doc"] for d in drafts
+        }
+        merged = _merged_docs(conn, draft_docs)
         changes = []
         for station_id in sorted(merged):
             old = active_docs.get(station_id)
@@ -349,6 +389,25 @@ def _register_web_routes(app: Flask) -> None:
                     "state": "new" if old is None else ("draft" if draft else "unchanged"),
                 }
             )
+
+        # Read-only preview of the mandatory degradation check.  It uses only
+        # the active tables and the tables calibrated from the pending merge;
+        # the outage list is not part of it and may still be edited.
+        preview = {"findings": [], "checked_lists": 0, "error": None}
+        if ctx is not None and drafts:
+            try:
+                preview_calibrated = _calibrate(merged)
+                preview = _run_degradation_check(conn, preview_calibrated)
+            except model.SchemaError as exc:
+                preview["error"] = f"待发草稿核算失败：{exc}"
+            except Exception as exc:  # pragma: no cover - defensive
+                preview["error"] = f"退化核查异常：{exc}"
+        station_names = {c["station_id"]: c["name"] for c in changes}
+        if ctx is not None:
+            station_names.update(
+                {m["station_id"]: m["name"] for m in ctx["stations"]}
+            )
+
         return render_template(
             "publish.html",
             drafts=drafts,
@@ -357,6 +416,8 @@ def _register_web_routes(app: Flask) -> None:
             outages=db.list_outages(conn),
             log=db.list_publish_log(conn),
             versions=db.list_versions(conn),
+            degradation=preview,
+            station_names=station_names,
         )
 
     @app.post("/admin/publish")
@@ -370,6 +431,7 @@ def _register_web_routes(app: Flask) -> None:
             return redirect(url_for("publish_page"))
 
         merged = _merged_docs(conn, drafts)
+        base_version_id = db.active_version_id(conn)
 
         # Calibration happens without holding the SQLite write lock, so the
         # outage list stays editable while the drawing is being calibrated.
@@ -384,8 +446,26 @@ def _register_web_routes(app: Flask) -> None:
             flash(f"核算异常，继续使用旧图：{exc}", "error")
             return redirect(url_for("publish_page"))
 
+        # Degradation check, still outside the write transaction: it only
+        # reads the two versions' combination tables, so outage edits remain
+        # possible while it runs.
         try:
-            version_id = _commit_publish(conn, calibrated, note, fingerprint)
+            degradation = _run_degradation_check(conn, calibrated)
+        except Exception as exc:  # pragma: no cover - defensive
+            _record_publish_failure(conn, f"退化核查异常：{exc}")
+            flash(f"退化核查异常，继续使用旧图：{exc}", "error")
+            return redirect(url_for("publish_page"))
+        if degradation["findings"]:
+            _record_publish_failure(
+                conn, f"发布中止：换图退化核查未通过（{len(degradation['findings'])} 处）"
+            )
+            flash(_degradation_message(degradation["findings"]), "error")
+            return redirect(url_for("publish_page"))
+
+        try:
+            version_id = _commit_publish(
+                conn, calibrated, note, fingerprint, base_version_id
+            )
         except _PublishAbort as exc:
             _record_publish_failure(conn, f"发布中止：{exc}")
             flash(f"发布中止，继续使用旧图：{exc}", "error")
@@ -468,12 +548,16 @@ def _commit_publish(
     calibrated: dict[str, dict],
     note: str,
     draft_fingerprint: str,
+    base_version_id: int | None,
 ) -> int:
     """Atomically publish tables + switch the active pointer.
 
     The current outage list is read *inside* the write transaction, so the
     consistency check and the version switch always use the latest list even
-    if data staff edited outages during calibration.
+    if data staff edited outages during calibration.  The degradation check is
+    likewise re-evaluated inside the transaction against the latest active
+    version and drafts: if either changed while calibration was running, the
+    request is rejected and must be re-published.
     """
 
     conn.execute("BEGIN IMMEDIATE")
@@ -481,6 +565,15 @@ def _commit_publish(
         fresh_drafts, fresh_fingerprint = _drafts_bundle(conn)
         if fresh_fingerprint != draft_fingerprint:
             raise _PublishAbort("核算期间草稿被修改，请重新发布")
+
+        if db.active_version_id(conn) != base_version_id:
+            raise _PublishAbort("核算期间生效版本已变化，请重新发布")
+
+        # Re-run the degradation check inside the write lock so the decision
+        # cannot be invalidated by a concurrent publish.
+        fresh_report = _run_degradation_check(conn, calibrated)
+        if fresh_report["findings"]:
+            raise _PublishAbort(_degradation_message(fresh_report["findings"]))
 
         # Re-read the outage list inside the transaction: it may have been
         # edited while calibration was running.

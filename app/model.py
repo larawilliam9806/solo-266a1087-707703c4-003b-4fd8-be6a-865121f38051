@@ -445,6 +445,167 @@ def evaluate_station(
     }
 
 
+# ---------------------------------------------------------------------------
+# Publish-time degradation check (table only, no graph walking)
+# ---------------------------------------------------------------------------
+
+# Per station, per platform and per direction at most this many hypothetical
+# outage lists are examined.  A station drawing carries at most 10 elevators,
+# so its full power set never exceeds 2**10 == 1024 lists.
+MAX_HYPOTHETICAL_OUTAGE_LISTS = 1024
+
+
+def _direction_cell(tables: dict, platform: str, direction: str) -> dict | None:
+    table = tables.get(platform)
+    if not table:
+        return None
+    return table.get(direction)
+
+
+def _direction_possible(cell: dict | None) -> bool:
+    return bool(cell and cell.get("possible")) and cell.get("sets") is not None
+
+
+def _works_under_outages(cell: dict, outages: frozenset[str]) -> bool:
+    """Table-only evaluation: a minimal set disjoint from the outage list."""
+
+    if not _direction_possible(cell):
+        return False
+    return any(not (set(w) & outages) for w in cell["sets"])
+
+
+def find_minimal_degradation(
+    old_cell: dict, new_cell: dict, candidate_elevators: list[str]
+) -> tuple[dict | None, int]:
+    """Find a minimum-size outage list that degrades one platform direction.
+
+    Only the two calibrated combination tables are consulted.  Elevators with
+    the same identifier in the two drawings are the same physical elevator, so
+    one hypothetical outage list applies to both tables directly.
+
+    The candidate universe is the set of elevators appearing in the *new*
+    drawing: an elevator absent from the new drawing can never be part of a
+    new working set, so adding it to an outage list cannot help break the new
+    drawing and would only inflate the list — a minimum trigger never needs
+    it.  Subsets are enumerated by increasing cardinality, so the first hit is
+    a minimum-cardinality trigger.
+
+    Returns a ``(result, examined)`` pair.  ``result`` is ``None`` when no
+    degrading list exists, otherwise::
+
+        {"outage_elevators": [...],   # minimum trigger, sorted
+         "old_working_set": [...]}    # old drawing still usable under it
+
+    ``examined`` is the number of hypothetical outage lists actually checked,
+    never exceeding :data:`MAX_HYPOTHETICAL_OUTAGE_LISTS`.
+    """
+
+    ordered = sorted(candidate_elevators)
+    examined = 0
+    for size in range(len(ordered) + 1):
+        for combo in combinations(ordered, size):
+            examined += 1
+            outages = frozenset(combo)
+            if not _works_under_outages(new_cell, outages):
+                # New drawing fails under this list; the old one must still
+                # pass for this to be a regression rather than a shared loss.
+                witness = next(
+                    (
+                        sorted(w)
+                        for w in old_cell["sets"]
+                        if not (set(w) & outages)
+                    ),
+                    None,
+                )
+                if witness is not None:
+                    return (
+                        {
+                            "outage_elevators": sorted(outages),
+                            "old_working_set": witness,
+                        },
+                        examined,
+                    )
+            if examined >= MAX_HYPOTHETICAL_OUTAGE_LISTS:
+                # The 10-elevator schema cap makes this unreachable for valid
+                # stations; it is a hard guard for the documented limit.
+                return None, examined
+    return None, examined
+
+
+def check_version_degradation(
+    old_maps: dict[str, dict], new_calibrated: dict[str, dict]
+) -> dict:
+    """Compare the active tables against the pending tables for regressions.
+
+    ``old_maps`` maps ``station_id`` to ``{"meta": ..., "tables": ...}`` from
+    the active published version; ``new_calibrated`` has the same shape for
+    the drawing about to be published.
+
+    Only platforms that exist in the *old* drawing are examined, once per
+    direction, and only when the old drawing can provide that direction.  A
+    platform removed by the new drawing (or a direction that became inherently
+    impossible there) counts as not passable, so it degrades under the empty
+    outage list.
+
+    Returns::
+
+        {
+          "findings": [
+            {"station_id", "platform", "direction",
+             "outage_elevators", "old_working_set"}
+          ],
+          "checked_lists": int,
+        }
+    """
+
+    findings: list[dict] = []
+    checked_lists = 0
+    for station_id in sorted(old_maps):
+        old_map = old_maps[station_id]
+        old_tables = old_map["tables"]
+        new_info = new_calibrated.get(station_id)
+        new_tables = new_info["tables"] if new_info else {}
+        new_elevators = sorted(
+            set((new_info["meta"].get("elevators") if new_info else []) or [])
+        )
+        for platform in old_map["meta"].get("platforms") or []:
+            for direction in DIRECTIONS:
+                old_cell = _direction_cell(old_tables, platform, direction)
+                if not _direction_possible(old_cell):
+                    # The old drawing could never provide this direction.
+                    continue
+                new_cell = _direction_cell(new_tables, platform, direction)
+                if not _direction_possible(new_cell):
+                    # Platform deleted or direction made inherently
+                    # impossible: the new drawing fails with every elevator
+                    # running, so the empty list is the minimum trigger.
+                    findings.append(
+                        {
+                            "station_id": station_id,
+                            "platform": platform,
+                            "direction": direction,
+                            "outage_elevators": [],
+                            "old_working_set": sorted(old_cell["sets"][0]),
+                        }
+                    )
+                    continue
+                result, examined = find_minimal_degradation(
+                    old_cell, new_cell, new_elevators
+                )
+                checked_lists += examined
+                if result is not None:
+                    findings.append(
+                        {
+                            "station_id": station_id,
+                            "platform": platform,
+                            "direction": direction,
+                            "outage_elevators": result["outage_elevators"],
+                            "old_working_set": result["old_working_set"],
+                        }
+                    )
+    return {"findings": findings, "checked_lists": checked_lists}
+
+
 def check_outaged_elevators_present(
     calibrated: dict[str, "Station"], outages: list[dict]
 ) -> list[str]:

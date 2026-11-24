@@ -5,7 +5,8 @@
 <p class="lead">
   发布时会把当前生效地图与所有草稿合并，逐站核算最小用梯组合，
   然后在同一事务里写入新版本并切换生效指针；判定始终以<strong>发布瞬间的最新停运名单</strong>为准。
-  若核算或保存失败、或新图缺少仍在停运的电梯，旧版本与当前名单继续供数。
+  发布前还会做<strong>换图退化核查</strong>：枚举假设停运名单，确认不存在“旧图能通、新图不通”的方向。
+  若核查或保存失败、或新图缺少仍在停运的电梯，旧版本与当前名单继续供数。
 </p>
 
 <div class="grid">
@@ -67,6 +68,73 @@
     {% endif %}
   </div>
 </div>
+
+<h2>换图退化核查</h2>
+<p class="lead">
+  逐个核对本次换图<strong>已有站台</strong>在旧图中的进站、出站方向，
+  只用两版的<strong>用梯组合表</strong>枚举假设停运名单（同号电梯视为同一台，
+  任一版出现的电梯都可假设停运），每站每个方向最多检查
+  {{ max_outage_lists }} 份名单。若同一名单下旧图能通、新图不通，给出停运台数最少的
+  触发名单及此时旧图仍可用的一组用梯组合。新版删掉的旧站台按不通算。
+  有退化则发布将被中止，生效版和待发草稿都会保留。
+</p>
+{% if not active_version %}
+  <div class="card"><p class="empty">尚无生效版本，首次发布没有旧图可对比，不执行退化核查。</p></div>
+{% elif not drafts %}
+  <div class="card"><p class="empty">没有待发草稿，无需核查。上传草稿后这里会显示核查结果。</p></div>
+{% elif degradation.error %}
+  <div class="card">
+    <span class="badge bad">无法核查</span>
+    <p>{{ degradation.error }}</p>
+    <p class="muted">请先修正草稿再发布；当前生效版本继续供数。</p>
+  </div>
+{% elif degradation.findings %}
+  <div class="card">
+    <p><span class="badge bad">核查未通过：{{ degradation.findings|length }} 处退化</span>
+       <span class="muted">共枚举 {{ degradation.checked_lists }} 份假设停运名单。
+       此时发布会被中止，请修改草稿后重新核查。</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>站点</th><th>站台</th><th>方向</th>
+          <th>最少停运台数的触发名单</th><th>该名单下旧图仍可用的用梯组合</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in degradation.findings %}
+          <tr>
+            <td>{{ station_names.get(f.station_id, f.station_id) }}
+              <span class="muted mono">{{ f.station_id }}</span></td>
+            <td class="mono">{{ f.platform }}</td>
+            <td>{{ direction_label(f.direction) }}</td>
+            <td>
+              {% if f.outage_elevators %}
+                <span class="mono">{{ f.outage_elevators|join('、') }}</span>
+                <div class="muted">{{ f.outage_elevators|length }} 台</div>
+              {% else %}
+                <span class="badge bad">空名单即退化</span>
+                <div class="muted">新图该方向本就不通（含站台被删除）</div>
+              {% endif %}
+            </td>
+            <td class="mono">
+              {% if f.old_working_set %}
+                {{ f.old_working_set|join(' + ') if f.old_working_set|length else '无须电梯' }}
+              {% else %}
+                无须电梯
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="card">
+    <p><span class="badge ok">核查通过</span>
+       <span class="muted">共枚举 {{ degradation.checked_lists }} 份假设停运名单，
+       未发现“旧图能通、新图不通”的退化。</span></p>
+  </div>
+{% endif %}
 
 <h2>版本历史</h2>
 {% if versions %}
