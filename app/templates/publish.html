@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}发布地图与组合表{% endblock %}
+{% block content %}
+<h1>发布地图与组合表</h1>
+<p class="lead">
+  发布时会把当前生效地图与所有草稿合并，逐站核算最小用梯组合，
+  然后在同一事务里写入新版本并切换生效指针；判定始终以<strong>发布瞬间的最新停运名单</strong>为准。
+  若核算或保存失败、或新图缺少仍在停运的电梯，旧版本与当前名单继续供数。
+</p>
+
+<div class="grid">
+  <div class="card">
+    <h2 style="margin-top:0">本次发布内容</h2>
+    {% if changes %}
+      <table>
+        <thead><tr><th>站点</th><th>名称</th><th>来源</th></tr></thead>
+        <tbody>
+          {% for c in changes %}
+            <tr>
+              <td class="mono">{{ c.station_id }}</td>
+              <td>{{ c.name }}</td>
+              <td>
+                {% if c.state == 'new' %}
+                  <span class="badge warn">新增站点</span>
+                {% elif c.state == 'draft' %}
+                  <span class="badge ok">用草稿更新</span>
+                {% else %}
+                  <span class="badge plain">沿用已生效图</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">既没有生效地图也没有草稿，无法发布。</p>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('publish_submit') }}" style="margin-top:0.9rem">
+      <label class="field">
+        <span>发布说明（可选）</span>
+        <input type="text" name="note" placeholder="例如：3 号口新增直梯">
+      </label>
+      <button type="submit" {% if not drafts %}disabled{% endif %}>核算并发布</button>
+      {% if not drafts %}<span class="muted">没有草稿时无需发布。</span>{% endif %}
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">当前停运名单</h2>
+    {% if outages %}
+      <ul class="sets">
+        {% for o in outages %}
+          <li class="mono">{{ o.elevator }}
+            {% if o.station_id %}<span class="muted">（{{ o.station_id }}）</span>{% endif %}
+            {% if o.note %}<span class="muted"> · {{ o.note }}</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+      <p class="muted">名单可在核算期间继续编辑；发布以提交时刻的最新名单校验。</p>
+    {% else %}
+      <p class="empty">当前没有停运电梯。</p>
+    {% endif %}
+    <p><a class="button secondary" href="{{ url_for('outages_page') }}">编辑停运名单</a></p>
+    {% if active_version %}
+      <p class="muted">当前生效版本：<strong>{{ active_version }}</strong></p>
+    {% endif %}
+  </div>
+</div>
+
+<h2>版本历史</h2>
+{% if versions %}
+  <div class="card">
+    <table>
+      <thead><tr><th>版本</th><th>发布时间 (UTC)</th><th>站点数</th><th>说明</th></tr></thead>
+      <tbody>
+        {% for v in versions %}
+          <tr>
+            <td class="mono">{{ v.id }}{% if v.id == active_version %}
+              <span class="badge ok">生效中</span>{% endif %}</td>
+            <td class="mono">{{ v.created_at }}</td>
+            <td>{{ v.stations }}</td>
+            <td>{{ v.note or '—' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <p class="empty">尚无发布记录。</p>
+{% endif %}
+
+<h2>发布日志</h2>
+{% if log %}
+  <div class="card">
+    <table>
+      <thead><tr><th>时间 (UTC)</th><th>结果</th><th>说明</th></tr></thead>
+      <tbody>
+        {% for l in log %}
+          <tr>
+            <td class="mono">{{ l.created_at }}</td>
+            <td>
+              {% if l.status == 'success' %}
+                <span class="badge ok">成功</span>
+              {% else %}
+                <span class="badge bad">失败</span>
+              {% endif %}
+            </td>
+            <td>{{ l.message }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <p class="empty">暂无发布日志。</p>
+{% endif %}
+{% endblock %}

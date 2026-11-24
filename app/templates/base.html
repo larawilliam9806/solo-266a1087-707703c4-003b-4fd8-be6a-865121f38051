@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}无障碍进出供数{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="site">
+  <span class="brand">地铁无障碍进出供数</span>
+  <nav>
+    <a href="{{ url_for('index') }}">站点总览</a>
+    <a href="{{ url_for('outages_page') }}">停运名单</a>
+    <a href="{{ url_for('upload_form') }}">上传站点</a>
+    <a href="{{ url_for('publish_page') }}">发布</a>
+  </nav>
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="flash {{ 'error' if category == 'error' else 'info' }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+<footer>判定只读已生效的组合表与当前停运名单；新图与组合表一同发布。</footer>
+</body>
+</html>

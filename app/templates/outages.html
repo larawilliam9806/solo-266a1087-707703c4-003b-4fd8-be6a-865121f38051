@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}停运名单{% endblock %}
+{% block content %}
+<h1>停运名单</h1>
+<p class="lead">
+  名单独立于地图版本，随时可改；判定结果立即按新名单重算，但只读取已生效的组合表。
+  因停运而不通的方向会给出所有<strong>最小复运组合</strong>。
+</p>
+
+<div class="grid">
+  <div class="card">
+    <h2 style="margin-top:0">加入停运</h2>
+    <form method="post" action="{{ url_for('outages_submit') }}">
+      <input type="hidden" name="action" value="add">
+      <label class="field">
+        <span>电梯编号</span>
+        <input type="text" name="elevator" list="elevator-list" placeholder="例如 S1-E2">
+      </label>
+      <datalist id="elevator-list">
+        {% for station_id, elevators in elevators_by_station.items() %}
+          {% for e in elevators %}
+            <option value="{{ e }}">{{ station_id }}</option>
+          {% endfor %}
+        {% endfor %}
+      </datalist>
+      <label class="field">
+        <span>所属站点（可选）</span>
+        <input type="text" name="station_id" placeholder="例如 S1">
+      </label>
+      <label class="field">
+        <span>备注（可选）</span>
+        <input type="text" name="note" placeholder="例如 例行检修">
+      </label>
+      <button type="submit">加入停运名单</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">批量替换名单</h2>
+    <form method="post" action="{{ url_for('outages_submit') }}">
+      <input type="hidden" name="action" value="replace">
+      <label class="field">
+        <span>每行一台，或用逗号分隔</span>
+        <textarea name="elevators" rows="8" placeholder="S1-E2&#10;S2-E3"></textarea>
+      </label>
+      <button type="submit">替换为这份名单</button>
+    </form>
+  </div>
+</div>
+
+<h2>当前停运</h2>
+{% if outages %}
+  <div class="card">
+    <table>
+      <thead><tr><th>电梯</th><th>站点</th><th>备注</th><th>更新时间 (UTC)</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for o in outages %}
+          <tr>
+            <td class="mono">{{ o.elevator }}</td>
+            <td class="mono">{{ o.station_id or '—' }}</td>
+            <td>{{ o.note or '—' }}</td>
+            <td class="mono">{{ o.updated_at }}</td>
+            <td>
+              <form method="post" action="{{ url_for('outages_submit') }}">
+                <input type="hidden" name="action" value="remove">
+                <input type="hidden" name="elevator" value="{{ o.elevator }}">
+                <button class="secondary" type="submit">恢复</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <p class="empty">当前没有停运电梯。</p>
+{% endif %}
+
+{% if elevators_by_station %}
+  <h2>已生效地图中的电梯</h2>
+  <div class="card">
+    <table>
+      <thead><tr><th>站点</th><th>电梯</th><th>状态</th></tr></thead>
+      <tbody>
+        {% for station_id, elevators in elevators_by_station.items() %}
+          {% for e in elevators %}
+            <tr>
+              <td class="mono">{{ station_id }}</td>
+              <td class="mono">{{ e }}</td>
+              <td>
+                {% if e in outages|map(attribute='elevator')|list %}
+                  <span class="badge bad">停运</span>
+                {% else %}
+                  <span class="badge ok">可用</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+{% endblock %}

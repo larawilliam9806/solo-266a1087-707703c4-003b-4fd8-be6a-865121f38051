@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}站点总览 · 无障碍进出{% endblock %}
+{% block content %}
+<h1>各站台能否无障碍进出</h1>
+<p class="lead">
+  当前生效地图版本：<strong>{{ active_version if active_version else '尚未发布' }}</strong>
+  · 停运 {{ outages|length }} 台
+  · 待发布草稿 {{ drafts }} 份
+</p>
+
+{% if not views %}
+  <div class="card">
+    <p>还没有生效的地图。先到 <a href="{{ url_for('upload_form') }}">上传站点</a>
+       按站上传 JSON 草稿，再到 <a href="{{ url_for('publish_page') }}">发布</a>
+       核算并发布组合表。</p>
+  </div>
+{% else %}
+  {% for view in views %}
+    <div class="card">
+      <h2 style="margin-top:0">
+        <a class="station-link" href="{{ url_for('station_detail', station_id=view.station_id) }}">
+          {{ view.name }}</a>
+        <span class="muted mono">{{ view.station_id }}</span>
+        {% if view.outages_applied %}
+          <span class="badge warn">停运 {{ view.outages_applied|length }} 台</span>
+        {% endif %}
+      </h2>
+      <table>
+        <thead>
+          <tr>
+            <th>站台</th>
+            <th>状态</th>
+            <th>出入口 → 站台</th>
+            <th>站台 → 出入口</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in view.platforms %}
+            <tr>
+              <td class="mono">{{ p.platform }}</td>
+              <td><span class="badge {{ status_class(p.status) }}">{{ status_label(p.status) }}</span></td>
+              {% for key in ['entrance_to_platform', 'platform_to_entrance'] %}
+                {% set d = p[key] %}
+                <td>
+                  {% if not d.possible %}
+                    <span class="badge bad">完全不通</span>
+                  {% elif d.accessible %}
+                    {% if d.no_elevator_needed %}
+                      <span class="badge plain">无须电梯</span>
+                    {% else %}
+                      <span class="badge ok">可通行</span>
+                      <div class="muted">用梯组合：</div>
+                      <ul class="sets">
+                        {% for s in d.minimal_elevator_sets %}
+                          <li class="mono">{{ s|join(' + ') }}</li>
+                        {% endfor %}
+                      </ul>
+                    {% endif %}
+                  {% else %}
+                    <span class="badge bad">不通</span>
+                    {% if d.minimal_recovery_sets %}
+                      <div class="muted">最小复运组合：</div>
+                      <ul class="sets">
+                        {% for s in d.minimal_recovery_sets %}
+                          <li class="mono">{{ s|join(' + ') }}</li>
+                        {% endfor %}
+                      </ul>
+                    {% endif %}
+                  {% endif %}
+                </td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if view.outages_not_in_station %}
+        <p class="muted mono">本图未包含的停运电梯：{{ view.outages_not_in_station|join('、') }}</p>
+      {% endif %}
+    </div>
+  {% endfor %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{{ view.name if view else station_id }} · 无障碍进出{% endblock %}
+{% block content %}
+{% if not view %}
+  <h1>站点不存在</h1>
+  <div class="card">
+    <p>站点 <span class="mono">{{ station_id }}</span> 不在当前生效地图中。</p>
+    <p><a class="button secondary" href="{{ url_for('index') }}">返回总览</a></p>
+  </div>
+{% else %}
+<h1>{{ view.name }} <span class="muted mono">{{ view.station_id }}</span></h1>
+<p class="lead">
+  地图版本 <strong>{{ view.version_id }}</strong>
+  · 出入口：{{ view.entrances|join('、') }}
+  · 电梯：{{ view.elevators|join('、') if view.elevators else '无' }}
+  {% if has_draft %}<br><a href="{{ url_for('publish_page') }}">该站有未发布草稿</a>{% endif %}
+</p>
+
+{% if view.outages_applied %}
+  <div class="flash info">当前停运：<span class="mono">{{ view.outages_applied|join('、') }}</span></div>
+{% endif %}
+{% if view.outages_not_in_station %}
+  <div class="flash info">停运名单中不属于本图的电梯（已忽略）：<span class="mono">{{ view.outages_not_in_station|join('、') }}</span></div>
+{% endif %}
+
+{% for p in view.platforms %}
+  <div class="card">
+    <h2 style="margin-top:0">
+      站台 <span class="mono">{{ p.platform }}</span>
+      <span class="badge {{ status_class(p.status) }}">{{ status_label(p.status) }}</span>
+    </h2>
+    <div class="grid">
+      {% for key in ['entrance_to_platform', 'platform_to_entrance'] %}
+        {% set d = p[key] %}
+        <div>
+          <h3>{{ direction_label(key) }}</h3>
+          {% if not d.possible %}
+            <p><span class="badge bad">完全不通</span>
+              <span class="muted">即使全部电梯可用，图中也不存在该方向的通路。</span></p>
+          {% elif d.accessible %}
+            {% if d.no_elevator_needed %}
+              <p><span class="badge plain">无须电梯即可通行</span></p>
+            {% else %}
+              <p><span class="badge ok">可通行</span></p>
+              <p class="muted" style="margin-bottom:0.2rem">最小用梯组合（去掉任一台即不通）：</p>
+              <ul class="sets">
+                {% for s in d.minimal_elevator_sets %}
+                  <li class="mono">{{ s|join(' + ') }}</li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          {% else %}
+            <p><span class="badge bad">因停运不通</span></p>
+            {% if d.minimal_recovery_sets %}
+              <p class="muted" style="margin-bottom:0.2rem">最小复运组合（少恢复任一台即不通）：</p>
+              <ul class="sets">
+                {% for s in d.minimal_recovery_sets %}
+                  <li class="mono">{{ s|join(' + ') }}</li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="muted">当前停运名单下无法通过复运恢复。</p>
+            {% endif %}
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+    <details>
+      <summary>本平台 JSON</summary>
+      <pre class="mono" style="white-space:pre-wrap">{{ p|tojson(indent=2) }}</pre>
+    </details>
+  </div>
+{% endfor %}
+
+<details class="card">
+  <summary>本站完整 JSON（与 <span class="mono">/api/v1/stations/{{ view.station_id }}</span> 相同）</summary>
+  <pre class="mono" style="white-space:pre-wrap">{{ view|tojson(indent=2) }}</pre>
+</details>
+{% endif %}
+{% endblock %}

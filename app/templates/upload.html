@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}上传站点 JSON{% endblock %}
+{% block content %}
+<h1>按站上传 JSON</h1>
+<p class="lead">
+  每份文档描述一个站：出入口、站台，以及可供轮椅通行的<strong>有向</strong>通道。
+  通道可标一台电梯（同一台电梯可标在多条通道上），每站最多 10 台。
+  电梯编号建议加站点前缀，例如 <span class="mono">S1-E1</span>。
+  上传后先存为草稿，需在<a href="{{ url_for('publish_page') }}">发布</a>页核算发布才生效。
+</p>
+
+<div class="grid">
+  <div class="card">
+    <h2 style="margin-top:0">上传文档</h2>
+    <form method="post" enctype="multipart/form-data" action="{{ url_for('upload_submit') }}">
+      <label class="field">
+        <span>站点编号（可留空，以文档为准）</span>
+        <input type="text" name="station_id" value="{{ request.form.get('station_id', '') }}"
+               placeholder="例如 S1">
+      </label>
+      <label class="field">
+        <span>选择 JSON 文件</span>
+        <input type="file" name="file" accept=".json,application/json">
+      </label>
+      <label class="field">
+        <span>或直接粘贴 JSON</span>
+        <textarea name="document" rows="18">{{ previous if previous is defined else '' }}</textarea>
+      </label>
+      <button type="submit">校验并存为草稿</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">文档格式</h2>
+    <pre class="mono" style="white-space:pre-wrap; font-size:0.8rem">{{ sample }}</pre>
+    <p class="muted">
+      <code>from</code> / <code>to</code> 使用 <span class="mono">entrance:编号</span>
+      或 <span class="mono">platform:编号</span>；<code>elevator</code> 可省略或为 null。
+      同一对节点要双向通行时，请分别写两条有向通道。
+    </p>
+  </div>
+</div>
+
+<h2>待发布草稿</h2>
+{% if drafts %}
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>站点</th><th>名称</th><th>更新时间 (UTC)</th><th>操作</th></tr>
+      </thead>
+      <tbody>
+        {% for d in drafts %}
+          <tr>
+            <td class="mono">{{ d.doc.get('station_id', d.station_id) }}</td>
+            <td>{{ d.doc.get('name', '') }}</td>
+            <td class="mono">{{ d.updated_at }}</td>
+            <td>
+              <form method="post" action="{{ url_for('delete_draft') }}"
+                    onsubmit="return confirm('删除该草稿？');">
+                <input type="hidden" name="station_id" value="{{ d.station_id }}">
+                <button class="danger" type="submit">删除</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p><a class="button" href="{{ url_for('publish_page') }}">前往发布</a></p>
+  </div>
+{% else %}
+  <p class="empty">暂无草稿。</p>
+{% endif %}
+
+{% if active_station_ids %}
+  <p class="muted">已生效地图中的站点：<span class="mono">{{ active_station_ids|join('、') }}</span></p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,15 @@
+services:
+  nav:
+    build: .
+    image: metro-accessible-nav:latest
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      DATABASE: /data/nav.db
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+    volumes:
+      - nav-data:/data
+    restart: unless-stopped
+
+volumes:
+  nav-data:
